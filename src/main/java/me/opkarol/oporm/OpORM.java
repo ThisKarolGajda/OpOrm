@@ -11,6 +11,8 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.sql.*;
+import java.util.ArrayList;
+import java.util.List;
 
 public class OpORM {
     private final HikariDataSource dataSource;
@@ -281,5 +283,29 @@ public class OpORM {
         } catch (SQLException e) {
             e.printStackTrace();
         }
+    }
+
+    public <T extends DatabaseEntity> List<T> findAll(@NotNull Class<T> entityClass) {
+        List<T> resultList = new ArrayList<>();
+        String tableName = entityClass.getSimpleName();
+
+        // Query to select all records from the table
+        String selectAllQuery = "SELECT * FROM " + tableName;
+
+        try (Statement statement = dataSource.getConnection().createStatement();
+             ResultSet resultSet = statement.executeQuery(selectAllQuery)) {
+
+            while (resultSet.next()) {
+                T instance = getObjectFromResultSet(entityClass, resultSet);
+                if (instance != null) {
+                    resultList.add(instance);
+                }
+            }
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+
+        return resultList;
     }
 }

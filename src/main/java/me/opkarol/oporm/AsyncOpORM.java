@@ -2,6 +2,7 @@ package me.opkarol.oporm;
 
 import org.jetbrains.annotations.NotNull;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,5 +33,10 @@ public class AsyncOpORM extends OpORM {
     @Override
     public void deleteById(@NotNull Class<? extends DatabaseEntity> entityClass, int id) {
         CompletableFuture.runAsync(() -> super.deleteById(entityClass, id), executorService);
+    }
+
+    @Override
+    public <T extends DatabaseEntity> List<T> findAll(@NotNull Class<T> entityClass) {
+        return CompletableFuture.supplyAsync(() -> super.findAll(entityClass), executorService).join();
     }
 }
