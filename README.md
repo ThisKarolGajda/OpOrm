@@ -37,7 +37,7 @@ OpORM is a lightweight Object-Relational Mapping library for Java, designed to s
 		    <id>jitpack.io</id>
 		    <url>https://jitpack.io</url>
 		</repository>
-	</repositories>
+   </repositories>
    
     ```
 
