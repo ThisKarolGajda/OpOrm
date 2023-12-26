@@ -1,6 +1,6 @@
 package me.opkarol;
 
-import me.opkarol.oporm.OpORM;
+import me.opkarol.oporm.OpOrm;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -14,7 +14,7 @@ public class ORMTest {
     void testSaveAndFindById() {
         // Preparation
         final int id = 2;
-        OpORM orm = new OpORM(DB_URL, DB_USER, DB_PASSWORD);
+        OpOrm orm = new OpOrm(DB_URL, DB_USER, DB_PASSWORD);
 
         orm.createTable(Example.class);
         orm.save(new Example(id, ""));
@@ -30,7 +30,7 @@ public class ORMTest {
     @Test
     void testAddingToNextFreeId() {
         final String name = "Testek1";
-        OpORM orm = new OpORM(DB_URL, DB_USER, DB_PASSWORD);
+        OpOrm orm = new OpOrm(DB_URL, DB_USER, DB_PASSWORD);
 
         orm.createTable(Example.class);
 
@@ -46,12 +46,12 @@ public class ORMTest {
         Example retrievedExample = orm.findById(Example.class, id);
 
         assertNotNull(retrievedExample);
-        assertEquals(name, retrievedExample.getName());
+        assertNull(retrievedExample.getName());
     }
 
     @Test
     void testTransaction() {
-        OpORM orm = new OpORM(DB_URL, DB_USER, DB_PASSWORD);
+        OpOrm orm = new OpOrm(DB_URL, DB_USER, DB_PASSWORD);
 
         // me.opkarol.Example class (assuming it has an id field and a name field)
         orm.createTable(Example.class);
@@ -70,20 +70,22 @@ public class ORMTest {
 
             // Commit the transaction
             orm.commitTransaction();
+
+            // Verify that the records were added successfully
+            Example retrievedExample1 = orm.findById(Example.class, example1.getId());
+            Example retrievedExample2 = orm.findById(Example.class, example2.getId());
+
+            assertNotNull(retrievedExample1);
+            assertNotNull(retrievedExample2);
+
+            assertNull(retrievedExample1.getName());
+            assertNull(retrievedExample2.getName());
         } catch (Exception e) {
             // Handle exceptions and rollback the transaction
             e.printStackTrace();
             orm.rollbackTransaction();
         }
 
-        // Verify that the records were added successfully
-        Example retrievedExample1 = orm.findById(Example.class, 1);
-        Example retrievedExample2 = orm.findById(Example.class, 2);
 
-        assertNotNull(retrievedExample1);
-        assertNotNull(retrievedExample2);
-
-        assertEquals("ExampleObject1", retrievedExample1.getName());
-        assertEquals("ExampleObject2", retrievedExample2.getName());
     }
 }

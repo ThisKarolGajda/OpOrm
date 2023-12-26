@@ -1,11 +1,11 @@
 package me.opkarol.oporm;
 
+
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
 
 public interface DatabaseEntity {
-
     /**
      * Get the unique identifier (ID) of the database entity.
      *
@@ -22,7 +22,9 @@ public interface DatabaseEntity {
         Field[] fields = getClass().getDeclaredFields();
 
         return Arrays.stream(fields)
-                .filter(field -> !Modifier.isStatic(field.getModifiers()) && !field.isSynthetic())
+                .filter(field -> !Modifier.isStatic(field.getModifiers())
+                        && !field.isSynthetic()
+                        && !field.isAnnotationPresent(IgnoreOrm.class))
                 .map(Field::getName)
                 .toArray(String[]::new);
     }
@@ -36,7 +38,9 @@ public interface DatabaseEntity {
         Field[] fields = getClass().getDeclaredFields();
 
         return Arrays.stream(fields)
-                .filter(field -> !Modifier.isStatic(field.getModifiers()) && !field.isSynthetic())
+                .filter(field -> !Modifier.isStatic(field.getModifiers())
+                        && !field.isSynthetic()
+                        && !field.isAnnotationPresent(IgnoreOrm.class))
                 .map(field -> {
                     try {
                         field.setAccessible(true);

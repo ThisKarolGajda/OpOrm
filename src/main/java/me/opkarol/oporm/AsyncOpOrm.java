@@ -7,11 +7,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class AsyncOpORM extends OpORM {
+public class AsyncOpOrm extends OpOrm {
 
     private final ExecutorService executorService = Executors.newCachedThreadPool();
 
-    public AsyncOpORM(String url, String user, String password) {
+    public AsyncOpOrm(String url, String user, String password) {
         super(url, user, password);
     }
 

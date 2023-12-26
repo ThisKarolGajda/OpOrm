@@ -14,10 +14,10 @@ import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
 
-public class OpORM {
+public class OpOrm {
     private final HikariDataSource dataSource;
 
-    public OpORM(String url, String user, String password) {
+    public OpOrm(String url, String user, String password) {
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl(url);
         config.setUsername(user);
@@ -30,7 +30,7 @@ public class OpORM {
     public void save(DatabaseEntity entity) {
         try {
             if (findById(entity.getClass(), entity.getId()) == null) {
-                insert(entity);
+                addToNextFreeId(entity);
             } else {
                 update(entity);
             }
@@ -69,12 +69,17 @@ public class OpORM {
 
         try (PreparedStatement statement = dataSource.getConnection().prepareStatement(query)) {
             for (int i = 0; i < fieldValues.length; i++) {
-                statement.setObject(i + 1, fieldValues[i]);
+                if (fieldValues[i] instanceof SerializableFieldOrm serializableFieldOrm) {
+                    // Serialize the value if it implements SerializableField
+                    statement.setString(i + 1, serializableFieldOrm.serialize());
+                } else {
+                    statement.setObject(i + 1, fieldValues[i]);
+                }
             }
             if (isUpdate) {
-                // Assuming there's a method to get the ID from an object
                 statement.setObject(fieldValues.length + 1, entity.getId());
             }
+
             statement.executeUpdate();
         } catch (Exception e) {
             e.printStackTrace();
@@ -118,13 +123,15 @@ public class OpORM {
 
         Field[] fields = entityClass.getDeclaredFields();
         for (Field field : fields) {
-            String fieldName = field.getName();
-            String fieldType = getDatabaseType(field.getType());
-            queryBuilder.append(fieldName).append(" ").append(fieldType).append(", ");
+            if (shouldIncludeField(field)) {
+                String fieldName = field.getName();
+                String fieldType = getDatabaseType(field.getType());
+                queryBuilder.append(fieldName).append(" ").append(fieldType).append(", ");
+            }
         }
 
         queryBuilder.delete(queryBuilder.length() - 2, queryBuilder.length()); // Remove the last comma and space
-        queryBuilder.append(")");
+        queryBuilder.append(") DEFAULT CHARSET=utf8");
 
         String query = queryBuilder.toString();
 
@@ -133,6 +140,12 @@ public class OpORM {
         } catch (SQLException e) {
             e.printStackTrace();
         }
+    }
+
+    private boolean shouldIncludeField(Field field) {
+        return !Modifier.isStatic(field.getModifiers())
+                && !field.isSynthetic()
+                && !field.isAnnotationPresent(IgnoreOrm.class);
     }
 
     @Contract(pure = true)
@@ -160,55 +173,45 @@ public class OpORM {
         return "VARCHAR(255)"; // Default to VARCHAR if the type is not recognized
     }
 
-    private <T extends DatabaseEntity> @Nullable T getObjectFromResultSet(@NotNull Class<T> entityClass, @Nullable ResultSet resultSet) {
-        if (resultSet == null) {
-            return null;
-        }
-
-        try {
-            T instance = entityClass.getDeclaredConstructor().newInstance();
-
-            if (resultSet.next()) {
-                Field[] fields = entityClass.getDeclaredFields();
-                for (Field field : fields) {
-                    if (!Modifier.isStatic(field.getModifiers()) && !field.isSynthetic()) {
-                        field.setAccessible(true);
-                        Object value = resultSet.getObject(field.getName());
-                        field.set(instance, value);
-                    }
-                }
-            } else {
-                return null;
-            }
-
-            resultSet.close();
-            return instance;
-        } catch (InstantiationException | IllegalAccessException | SQLException | NoSuchMethodException | java.lang.reflect.InvocationTargetException e) {
-            e.printStackTrace();
-            return null;
-        }
-    }
-
-    /**
-     * Returns open ResultSet.
-     */
-    private @Nullable ResultSet getResultSetById(@NotNull Class<? extends DatabaseEntity> entityClass, int id) {
+    public @Nullable <T extends DatabaseEntity> T findById(@NotNull Class<T> entityClass, int id) {
         String tableName = entityClass.getSimpleName();
         String query = "SELECT * FROM " + tableName + " WHERE id = ?";
 
-        try {
-            PreparedStatement statement = dataSource.getConnection().prepareStatement(query);
+        try (PreparedStatement statement = dataSource.getConnection().prepareStatement(query)) {
             statement.setInt(1, id);
-            return statement.executeQuery();
-        } catch (SQLException e) {
+
+            try (ResultSet resultSet = statement.executeQuery()) {
+                T instance = null;
+                if (resultSet.next()) {
+                    instance = entityClass.getDeclaredConstructor().newInstance();
+                    Field[] fields = entityClass.getDeclaredFields();
+
+                    for (Field field : fields) {
+                        if (shouldIncludeField(field)) {
+                            field.setAccessible(true);
+
+                            if (field.isAnnotationPresent(SerializableOrm.class)) {
+                                if (SerializableFieldOrm.class.isAssignableFrom(field.getType())) {
+                                    SerializableFieldOrm serializableFieldOrm = (SerializableFieldOrm) field.getType().newInstance();
+                                    field.set(instance, serializableFieldOrm.deserialize(resultSet.getString(field.getName())));
+                                } else {
+                                    throw new UnsupportedOperationException("Field annotated with @SerializableOrm must implement SerializableField: " + field.getName());
+                                }
+                            } else {
+                                Object value = resultSet.getObject(field.getName());
+                                field.set(instance, value);
+                            }
+                        }
+                    }
+                }
+
+                return instance;
+            }
+
+        } catch (SQLException | InstantiationException | IllegalAccessException | NoSuchMethodException | java.lang.reflect.InvocationTargetException e) {
             e.printStackTrace();
             return null;
         }
-    }
-
-    public @Nullable <T extends DatabaseEntity> T findById(@NotNull Class<T> entityClass, int id) {
-        ResultSet resultSet = getResultSetById(entityClass, id);
-        return getObjectFromResultSet(entityClass, resultSet);
     }
 
     public <T extends DatabaseEntity> void addToNextFreeId(@NotNull T entity) {
@@ -225,13 +228,12 @@ public class OpORM {
             if (resultSet.next()) {
                 int maxId = resultSet.getInt(1);
 
-                // Use reflection to set the ID field of the entity to the next available ID
-                Field idField = entityClass.getDeclaredField("id");
+                Field idField = entityClass.getDeclaredField(getPrimaryKeyFieldName(entityClass));
                 idField.setAccessible(true);
                 idField.set(entity, maxId + 1);
 
                 // Save the entity to the database
-                save(entity);
+                insert(entity);
             }
         } catch (SQLException | NoSuchFieldException | IllegalAccessException e) {
             e.printStackTrace();
@@ -288,21 +290,37 @@ public class OpORM {
     public <T extends DatabaseEntity> List<T> findAll(@NotNull Class<T> entityClass) {
         List<T> resultList = new ArrayList<>();
         String tableName = entityClass.getSimpleName();
-
-        // Query to select all records from the table
         String selectAllQuery = "SELECT * FROM " + tableName;
 
-        try (Statement statement = dataSource.getConnection().createStatement();
-             ResultSet resultSet = statement.executeQuery(selectAllQuery)) {
+        try (PreparedStatement statement = dataSource.getConnection().prepareStatement(selectAllQuery);
+             ResultSet resultSet = statement.executeQuery()) {
 
             while (resultSet.next()) {
-                T instance = getObjectFromResultSet(entityClass, resultSet);
-                if (instance != null) {
-                    resultList.add(instance);
+                T instance = entityClass.getDeclaredConstructor().newInstance();
+                Field[] fields = entityClass.getDeclaredFields();
+
+                for (Field field : fields) {
+                    if (shouldIncludeField(field)) {
+                        field.setAccessible(true);
+
+                        if (field.isAnnotationPresent(SerializableOrm.class)) {
+                            if (SerializableFieldOrm.class.isAssignableFrom(field.getType())) {
+                                SerializableFieldOrm serializableFieldOrm = (SerializableFieldOrm) field.getType().newInstance();
+                                field.set(instance, serializableFieldOrm.deserialize(resultSet.getString(field.getName())));
+                            } else {
+                                throw new UnsupportedOperationException("Field annotated with @SerializableOrm must implement SerializableField: " + field.getName());
+                            }
+                        } else {
+                            Object value = resultSet.getObject(field.getName());
+                            field.set(instance, value);
+                        }
+                    }
                 }
+
+                resultList.add(instance);
             }
 
-        } catch (SQLException e) {
+        } catch (SQLException | InstantiationException | IllegalAccessException | NoSuchMethodException | java.lang.reflect.InvocationTargetException e) {
             e.printStackTrace();
         }
 

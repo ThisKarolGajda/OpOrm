@@ -2,11 +2,11 @@
  * The "me.opkarol.oporm" package contains classes for Object-Relational Mapping (ORM) in Java applications.
  * This ORM provides a high-level abstraction for interacting with relational databases.
  *
- * <p>The main class, {@link me.opkarol.oporm.OpORM}, offers features such as CRUD operations, dynamic table creation,
+ * <p>The main class, {@link me.opkarol.oporm.OpOrm}, offers features such as CRUD operations, dynamic table creation,
  * transaction management, asynchronous operations, and more. The ORM aims to simplify database interactions and
  * promote efficient and maintainable code.
  *
- * <p>The package also includes an asynchronous version of the ORM, {@link me.opkarol.oporm.AsyncOpORM}, which extends
+ * <p>The package also includes an asynchronous version of the ORM, {@link me.opkarol.oporm.AsyncOpOrm}, which extends
  * the base ORM to support asynchronous execution of database operations using {@link java.util.concurrent.CompletableFuture}.
  *
  * <p>Annotations, such as {@link me.opkarol.oporm.Id}, are used for customization, and reflection is employed for
