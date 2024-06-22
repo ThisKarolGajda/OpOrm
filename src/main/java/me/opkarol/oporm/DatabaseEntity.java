@@ -1,23 +1,14 @@
 package me.opkarol.oporm;
 
 
+import java.io.Serializable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
 
-public interface DatabaseEntity {
-    /**
-     * Get the unique identifier (ID) of the database entity.
-     *
-     * @return The ID of the entity.
-     */
-    int getId();
+public interface DatabaseEntity<PK extends Serializable> {
+    PK getId();
 
-    /**
-     * Get an array of field names for the database entity.
-     *
-     * @return An array of field names.
-     */
     default String[] getFieldNames() {
         Field[] fields = getClass().getDeclaredFields();
 
@@ -29,11 +20,6 @@ public interface DatabaseEntity {
                 .toArray(String[]::new);
     }
 
-    /**
-     * Get an array of field values for the database entity.
-     *
-     * @return An array of field values.
-     */
     default Object[] getFieldValues() {
         Field[] fields = getClass().getDeclaredFields();
 

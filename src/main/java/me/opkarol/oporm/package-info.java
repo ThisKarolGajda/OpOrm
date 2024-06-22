@@ -9,7 +9,7 @@
  * <p>The package also includes an asynchronous version of the ORM, {@link me.opkarol.oporm.AsyncOpOrm}, which extends
  * the base ORM to support asynchronous execution of database operations using {@link java.util.concurrent.CompletableFuture}.
  *
- * <p>Annotations, such as {@link me.opkarol.oporm.Id}, are used for customization, and reflection is employed for
+ * <p>Annotations, such as {@link me.opkarol.oporm.PrimaryKey}, are used for customization, and reflection is employed for
  * mapping Java objects to database records. The code is organized for modularity and extendability.
  *
  * <p>The base class for entities to be managed by the ORM is {@link me.opkarol.oporm.DatabaseEntity}. This class

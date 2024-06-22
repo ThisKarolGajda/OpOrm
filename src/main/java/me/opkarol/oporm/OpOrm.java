@@ -2,6 +2,7 @@ package me.opkarol.oporm;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import org.bukkit.Bukkit;
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -12,25 +13,47 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 
 public class OpOrm {
     private final HikariDataSource dataSource;
+    private Connection connection;
 
     public OpOrm(String url, String user, String password) {
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl(url);
         config.setUsername(user);
         config.setPassword(password);
-        config.setMaximumPoolSize(10);
+        config.setMaximumPoolSize(25);
 
         dataSource = new HikariDataSource(config);
+        connection = null;
     }
 
-    public void save(DatabaseEntity entity) {
+    private Connection getConnection() throws SQLException {
+        if (connection == null || connection.isClosed()) {
+            connection = dataSource.getConnection();
+        }
+        return connection;
+    }
+
+    public void closeConnection() {
+        try {
+            if (connection != null && !connection.isClosed()) {
+                connection.close();
+                connection = null;
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public <PK extends Serializable> void save(DatabaseEntity<PK> entity) {
         try {
             if (findById(entity.getClass(), entity.getId()) == null) {
-                addToNextFreeId(entity);
+                insert(entity);
             } else {
                 update(entity);
             }
@@ -39,7 +62,7 @@ public class OpOrm {
         }
     }
 
-    private void executeUpdateQuery(@NotNull DatabaseEntity entity, boolean isUpdate) {
+    private void executeUpdateQuery(@NotNull DatabaseEntity<?> entity, boolean isUpdate) {
         String tableName = entity.getClass().getSimpleName();
         String[] fieldNames = entity.getFieldNames();
         Object[] fieldValues = entity.getFieldValues();
@@ -66,8 +89,7 @@ public class OpOrm {
         }
 
         String query = queryBuilder.toString();
-
-        try (PreparedStatement statement = dataSource.getConnection().prepareStatement(query)) {
+        try (PreparedStatement statement = getConnection().prepareStatement(query)) {
             for (int i = 0; i < fieldValues.length; i++) {
                 if (fieldValues[i] instanceof SerializableFieldOrm serializableFieldOrm) {
                     // Serialize the value if it implements SerializableField
@@ -86,25 +108,11 @@ public class OpOrm {
         }
     }
 
-    private @NotNull String getPrimaryKeyFieldName(@NotNull Class<? extends DatabaseEntity> entityClass) {
-        Field[] fields = entityClass.getDeclaredFields();
-        for (Field field : fields) {
-            Annotation[] annotations = field.getDeclaredAnnotations();
-            for (Annotation annotation : annotations) {
-                if (annotation.annotationType().equals(Id.class)) {
-                    return field.getName();
-                }
-            }
-        }
-        throw new IllegalArgumentException("No field annotated with @Id found in " + entityClass.getSimpleName());
-    }
-
-
-    private void insert(DatabaseEntity entity) {
+    private void insert(DatabaseEntity<?> entity) {
         executeUpdateQuery(entity, false);
     }
 
-    private void update(DatabaseEntity entity) {
+    private void update(DatabaseEntity<?> entity) {
         executeUpdateQuery(entity, true);
     }
 
@@ -113,7 +121,7 @@ public class OpOrm {
      *
      * @param entityClass The class of the DatabaseEntity.
      */
-    public void createTable(@NotNull Class<? extends DatabaseEntity> entityClass) {
+    public void createTable(@NotNull Class<? extends DatabaseEntity<?>> entityClass) {
         if (!Serializable.class.isAssignableFrom(entityClass)) {
             throw new IllegalArgumentException("Class must implement Serializable: " + entityClass.getName());
         }
@@ -135,7 +143,7 @@ public class OpOrm {
 
         String query = queryBuilder.toString();
 
-        try (Statement statement = dataSource.getConnection().createStatement()) {
+        try (Statement statement = getConnection().createStatement()) {
             statement.executeUpdate(query);
         } catch (SQLException e) {
             e.printStackTrace();
@@ -173,12 +181,15 @@ public class OpOrm {
         return "VARCHAR(255)"; // Default to VARCHAR if the type is not recognized
     }
 
-    public @Nullable <T extends DatabaseEntity> T findById(@NotNull Class<T> entityClass, int id) {
+    public <PK extends Serializable, T extends DatabaseEntity<PK>> T findById(@NotNull Class<T> entityClass, PK id) {
         String tableName = entityClass.getSimpleName();
-        String query = "SELECT * FROM " + tableName + " WHERE id = ?";
+        String primaryKeyFieldName = getPrimaryKeyFieldName(entityClass);
 
-        try (PreparedStatement statement = dataSource.getConnection().prepareStatement(query)) {
-            statement.setInt(1, id);
+        // Use the primary key field in the WHERE clause
+        String query = "SELECT * FROM " + tableName + " WHERE " + primaryKeyFieldName + " = ?";
+
+        try (PreparedStatement statement = getConnection().prepareStatement(query)) {
+            setPrimaryKeyParameter(statement, id);
 
             try (ResultSet resultSet = statement.executeQuery()) {
                 T instance = null;
@@ -189,14 +200,9 @@ public class OpOrm {
                     for (Field field : fields) {
                         if (shouldIncludeField(field)) {
                             field.setAccessible(true);
-
-                            if (field.isAnnotationPresent(SerializableOrm.class)) {
-                                if (SerializableFieldOrm.class.isAssignableFrom(field.getType())) {
-                                    SerializableFieldOrm serializableFieldOrm = (SerializableFieldOrm) field.getType().newInstance();
-                                    field.set(instance, serializableFieldOrm.deserialize(resultSet.getString(field.getName())));
-                                } else {
-                                    throw new UnsupportedOperationException("Field annotated with @SerializableOrm must implement SerializableField: " + field.getName());
-                                }
+                            if (SerializableFieldOrm.class.isAssignableFrom(field.getType())) {
+                                SerializableFieldOrm serializableFieldOrm = (SerializableFieldOrm) field.getType().newInstance();
+                                field.set(instance, serializableFieldOrm.deserialize(resultSet.getString(field.getName())));
                             } else {
                                 Object value = resultSet.getObject(field.getName());
                                 field.set(instance, value);
@@ -208,46 +214,22 @@ public class OpOrm {
                 return instance;
             }
 
-        } catch (SQLException | InstantiationException | IllegalAccessException | NoSuchMethodException | java.lang.reflect.InvocationTargetException e) {
+        } catch (SQLException | InstantiationException | IllegalAccessException | NoSuchMethodException |
+                 java.lang.reflect.InvocationTargetException e) {
             e.printStackTrace();
             return null;
         }
     }
 
-    public <T extends DatabaseEntity> void addToNextFreeId(@NotNull T entity) {
-        Class<? extends DatabaseEntity> entityClass = entity.getClass();
+    public <PK extends Serializable> void deleteById(@NotNull Class<? extends DatabaseEntity<?>> entityClass, PK id) {
         String tableName = entityClass.getSimpleName();
+        String primaryKeyFieldName = getPrimaryKeyFieldName(entityClass);
 
-        // Query to find the maximum ID in the table
-        String maxIdQuery = "SELECT MAX(id) FROM " + tableName;
+        // Query to delete the record by primary key
+        String deleteQuery = "DELETE FROM " + tableName + " WHERE " + primaryKeyFieldName + " = ?";
 
-        try (Statement statement = dataSource.getConnection().createStatement()) {
-            ResultSet resultSet = statement.executeQuery(maxIdQuery);
-
-            // Get the maximum ID from the result set
-            if (resultSet.next()) {
-                int maxId = resultSet.getInt(1);
-
-                Field idField = entityClass.getDeclaredField(getPrimaryKeyFieldName(entityClass));
-                idField.setAccessible(true);
-                idField.set(entity, maxId + 1);
-
-                // Save the entity to the database
-                insert(entity);
-            }
-        } catch (SQLException | NoSuchFieldException | IllegalAccessException e) {
-            e.printStackTrace();
-        }
-    }
-
-    public void deleteById(@NotNull Class<? extends DatabaseEntity> entityClass, int id) {
-        String tableName = entityClass.getSimpleName();
-
-        // Query to delete the record by ID
-        String deleteQuery = "DELETE FROM " + tableName + " WHERE id = ?";
-
-        try (PreparedStatement statement = dataSource.getConnection().prepareStatement(deleteQuery)) {
-            statement.setInt(1, id);
+        try (PreparedStatement statement = getConnection().prepareStatement(deleteQuery)) {
+            setPrimaryKeyParameter(statement, id);
             statement.executeUpdate();
         } catch (SQLException e) {
             e.printStackTrace();
@@ -255,7 +237,7 @@ public class OpOrm {
     }
 
     public void beginTransaction() {
-        try (Connection connection = dataSource.getConnection()) {
+        try (Connection connection = getConnection()) {
             if (connection != null && connection.getAutoCommit()) {
                 connection.setAutoCommit(false);
             }
@@ -265,7 +247,7 @@ public class OpOrm {
     }
 
     public void commitTransaction() {
-        try (Connection connection = dataSource.getConnection()) {
+        try (Connection connection = getConnection()) {
             if (connection != null && !connection.getAutoCommit()) {
                 connection.commit();
                 connection.setAutoCommit(true);
@@ -277,7 +259,7 @@ public class OpOrm {
     }
 
     public void rollbackTransaction() {
-        try (Connection connection = dataSource.getConnection()) {
+        try (Connection connection = getConnection()) {
             if (connection != null && !connection.getAutoCommit()) {
                 connection.rollback();
                 connection.setAutoCommit(true);
@@ -292,7 +274,7 @@ public class OpOrm {
         String tableName = entityClass.getSimpleName();
         String selectAllQuery = "SELECT * FROM " + tableName;
 
-        try (PreparedStatement statement = dataSource.getConnection().prepareStatement(selectAllQuery);
+        try (PreparedStatement statement = getConnection().prepareStatement(selectAllQuery);
              ResultSet resultSet = statement.executeQuery()) {
 
             while (resultSet.next()) {
@@ -303,13 +285,10 @@ public class OpOrm {
                     if (shouldIncludeField(field)) {
                         field.setAccessible(true);
 
-                        if (field.isAnnotationPresent(SerializableOrm.class)) {
-                            if (SerializableFieldOrm.class.isAssignableFrom(field.getType())) {
-                                SerializableFieldOrm serializableFieldOrm = (SerializableFieldOrm) field.getType().newInstance();
-                                field.set(instance, serializableFieldOrm.deserialize(resultSet.getString(field.getName())));
-                            } else {
-                                throw new UnsupportedOperationException("Field annotated with @SerializableOrm must implement SerializableField: " + field.getName());
-                            }
+                        if (SerializableFieldOrm.class.isAssignableFrom(field.getType())) {
+                            SerializableFieldOrm serializableFieldOrm = (SerializableFieldOrm) field.getType().newInstance();
+                            field.set(instance, serializableFieldOrm.deserialize(resultSet.getString(field.getName())));
+
                         } else {
                             Object value = resultSet.getObject(field.getName());
                             field.set(instance, value);
@@ -320,10 +299,39 @@ public class OpOrm {
                 resultList.add(instance);
             }
 
-        } catch (SQLException | InstantiationException | IllegalAccessException | NoSuchMethodException | java.lang.reflect.InvocationTargetException e) {
-            e.printStackTrace();
+        } catch (SQLException | InstantiationException | IllegalAccessException | NoSuchMethodException |
+                 java.lang.reflect.InvocationTargetException e) {
+            if (e.getClass().equals(SQLSyntaxErrorException.class)) {
+                Bukkit.getLogger().info("[OpOrm] It is recommended to restart your server! New MySql table had been created!!");
+            } else {
+                e.printStackTrace();
+            }
         }
 
         return resultList;
+    }
+
+    private <PK extends Serializable> void setPrimaryKeyParameter(PreparedStatement statement, PK id) throws SQLException {
+        if (id instanceof String) {
+            statement.setString(1, (String) id);
+        } else if (id instanceof Integer) {
+            statement.setInt(1, (Integer) id);
+        } else if (id instanceof Long) {
+            statement.setLong(1, (Long) id);
+        } else if (id instanceof UUID) {
+            statement.setString(1, id.toString());
+        } else {
+            statement.setObject(1, id);
+        }
+    }
+
+    private @NotNull String getPrimaryKeyFieldName(@NotNull Class<? extends DatabaseEntity> entityClass) {
+        Field[] fields = entityClass.getDeclaredFields();
+        for (Field field : fields) {
+            if (field.isAnnotationPresent(PrimaryKey.class)) {
+                return field.getName();
+            }
+        }
+        throw new IllegalArgumentException("No field annotated with @PrimaryKey found in " + entityClass.getSimpleName());
     }
 }
